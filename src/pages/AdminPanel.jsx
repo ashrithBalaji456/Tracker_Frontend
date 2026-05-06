@@ -23,6 +23,22 @@ const attendance = (status) => ({
   HALF_DAY_PRESENT: 'Half day',
   ABSENT: 'Absent',
 }[status] || 'Absent');
+const emptyReportFor = (tasker, workDate) => ({
+  tasker,
+  workDate,
+  punchedInAt: null,
+  punchedOutAt: null,
+  loginSeconds: 0,
+  taskingSeconds: 0,
+  expectedTaskingSeconds: 0,
+  completedTasks: 0,
+  attendanceStatus: 'ABSENT',
+  flagged: false,
+  flagReason: '',
+  flagReasons: [],
+  averageRating: 0,
+});
+const adminErrorMessage = (error) => error?.response?.data?.message || 'Request failed';
 
 export default function AdminPanel() {
   const navigate = useNavigate();
@@ -41,19 +57,33 @@ export default function AdminPanel() {
   const [error, setError] = useState('');
 
   const load = async (targetDate = date) => {
-    const [allUsers, taskerReports, missingRequests, leaveRequests] = await Promise.all([
+    const [usersResult, reportsResult, missingResult, leavesResult] = await Promise.allSettled([
       authApi.users(),
       taskingApi.taskerReports(targetDate),
       taskingApi.missingProjectRequests(),
       taskingApi.leaveRequests(),
     ]);
-    setUsers(allUsers);
-    setReports(taskerReports);
-    setMissing(missingRequests);
-    setLeaves(leaveRequests);
+
+    const nextUsers = usersResult.status === 'fulfilled' ? usersResult.value : users;
+    if (usersResult.status === 'fulfilled') setUsers(nextUsers);
+    if (reportsResult.status === 'fulfilled') {
+      setReports(reportsResult.value);
+    } else if (usersResult.status === 'fulfilled') {
+      setReports(nextUsers.filter((user) => user.role === 'MEMBER').map((user) => emptyReportFor(user, targetDate)));
+    }
+    if (missingResult.status === 'fulfilled') setMissing(missingResult.value);
+    if (leavesResult.status === 'fulfilled') setLeaves(leavesResult.value);
+
+    const failures = [
+      usersResult.status === 'rejected' ? `Users: ${adminErrorMessage(usersResult.reason)}` : '',
+      reportsResult.status === 'rejected' ? `Reports: ${adminErrorMessage(reportsResult.reason)}` : '',
+      missingResult.status === 'rejected' ? `Requests: ${adminErrorMessage(missingResult.reason)}` : '',
+      leavesResult.status === 'rejected' ? `Leaves: ${adminErrorMessage(leavesResult.reason)}` : '',
+    ].filter(Boolean);
+    setError(failures.join(' | '));
   };
 
-  useEffect(() => { load().catch(() => setError('Could not load admin data')); }, []);
+  useEffect(() => { load(); }, []);
 
   const taskers = useMemo(() => users.filter((user) => user.role === 'MEMBER'), [users]);
   const warningKey = (report, reason = report.flagReason || '') => `${date}:${report.tasker.id}:${reason}`;
@@ -187,6 +217,7 @@ export default function AdminPanel() {
           />
         </div>
         <div className="admin-list">
+          {sortedReports.length === 0 && <p className="muted">No tasker records found for this date.</p>}
           {sortedReports.map((report) => (
             <div
               className={`admin-report-row clickable ${currentFlagReason(report) ? 'flagged' : ''}`}
