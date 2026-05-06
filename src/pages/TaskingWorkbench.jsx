@@ -49,6 +49,7 @@ export default function TaskingWorkbench({ catalogOnly = false }) {
   const [error, setError] = useState('');
   const [tick, setTick] = useState(Date.now());
   const [summaryLoadedAt, setSummaryLoadedAt] = useState(Date.now());
+  const [activeTaskStartedAt, setActiveTaskStartedAt] = useState(null);
   const currentDate = todayKey();
 
   const load = async () => {
@@ -74,6 +75,21 @@ export default function TaskingWorkbench({ catalogOnly = false }) {
     const id = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+  useEffect(() => {
+    const activeTask = summary?.activeTask;
+    if (!activeTask) {
+      setActiveTaskStartedAt(null);
+      return;
+    }
+    setActiveTaskStartedAt((current) => {
+      if (current?.id === activeTask.id) return current;
+      const serverStartedAt = new Date(activeTask.startedAt).getTime();
+      return {
+        id: activeTask.id,
+        startedAt: Number.isFinite(serverStartedAt) ? serverStartedAt : Date.now(),
+      };
+    });
+  }, [summary?.activeTask?.id, summary?.activeTask?.startedAt]);
 
   const currentProject = projects.find((project) => project.name === selected)
     || projects.find((project) => project.name === summary?.activeTask?.projectName);
@@ -85,8 +101,13 @@ export default function TaskingWorkbench({ catalogOnly = false }) {
       project.name.toLowerCase().includes(needle) || project.domain.toLowerCase().includes(needle));
   }, [projects, query]);
 
-  const elapsed = summary?.activeTask
-    ? Math.floor((Date.now() - new Date(summary.activeTask.startedAt).getTime()) / 1000)
+  const activeStartedAt = summary?.activeTask
+    ? activeTaskStartedAt?.id === summary.activeTask.id
+      ? activeTaskStartedAt.startedAt
+      : new Date(summary.activeTask.startedAt).getTime()
+    : null;
+  const elapsed = summary?.activeTask && Number.isFinite(activeStartedAt)
+    ? Math.floor((tick - activeStartedAt) / 1000)
     : 0;
   const dynamicLoginSeconds = summary?.punchedIn && summary?.punchedInAt
     ? (summary.loginSeconds || 0) + Math.floor((Date.now() - summaryLoadedAt) / 1000)
@@ -115,6 +136,7 @@ export default function TaskingWorkbench({ catalogOnly = false }) {
     event.preventDefault();
     call(async () => {
       const active = await taskingApi.start({ externalTaskId: taskId, projectName: selected });
+      setActiveTaskStartedAt({ id: active.id, startedAt: Date.now() });
       setPromptText('');
       setJustification('');
       setNoJustification(active.projectName.includes('without'));
@@ -128,6 +150,7 @@ export default function TaskingWorkbench({ catalogOnly = false }) {
     setPromptText('');
     setJustification('');
     setNoJustification(false);
+    setActiveTaskStartedAt(null);
     return data;
   });
 
@@ -162,6 +185,7 @@ export default function TaskingWorkbench({ catalogOnly = false }) {
     setPromptText('');
     setJustification('');
     setNoJustification(false);
+    setActiveTaskStartedAt(null);
     setSelectionComplete(true);
     setHistorySummary(data);
     if (user?.role === 'ADMIN') setProductivityFlags(await taskingApi.productivityFlags());
